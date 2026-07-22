@@ -112,17 +112,17 @@ Momentum strategies require careful calibration of:
 
 ```mermaid
 flowchart TD
-    A[MongoDB<br/>Market Data] -->|GridFS Download| B[Local DuckDB]
-    B --> C[Data Loading<br/>NIFTY + 500 Stocks]
-    C --> D[Phase Detection<br/>Zig-zag 6% Swing]
-    D --> E[Pattern Windows<br/>Rise-Fall Cycles]
-    E --> F[Stock Ranking<br/>Per Leg (ROC/Vol/Beta)]
-    F --> G[Common Selection<br/>Intersection]
-    G --> H[NIFTY Entry Trigger<br/>+X% Rise]
-    H --> I[Stock Execution<br/>Buy at Trigger]
-    I --> J[NIFTY Exit Trigger<br/>-Y% Fall from Peak]
-    J --> K[Portfolio Analysis<br/>Equity Curve, Metrics]
-    K --> L[Export to Excel<br/>Interactive Workbook]
+    A[MongoDB\nMarket Data] -->|GridFS Download| B[Local DuckDB]
+    B --> C[Data Loading\nNIFTY + 500 Stocks]
+    C --> D[Phase Detection\nZig-zag 6% Swing]
+    D --> E[Pattern Windows\nRise-Fall Cycles]
+    E --> F[Stock Ranking\nPer Leg\nROC/Vol/Beta]
+    F --> G[Common Selection\nIntersection]
+    G --> H[NIFTY Entry Trigger\n+X% Rise]
+    H --> I[Stock Execution\nBuy at Trigger]
+    I --> J[NIFTY Exit Trigger\n-Y% Fall from Peak]
+    J --> K[Portfolio Analysis\nEquity Curve, Metrics]
+    K --> L[Export to Excel\nInteractive Workbook]
 ```
 
 ### Data Flow Details
@@ -146,29 +146,29 @@ flowchart TD
 ```mermaid
 graph TB
     subgraph "UI Layer"
-        A[Streamlit App<br/>app.py]
+        A[Streamlit App\napp.py]
     end
     
     subgraph "Core Engine"
-        B[momentum_engine.py<br/>Main backtesting logic]
-        C[multi_leg_engine.py<br/>Pattern window finder]
-        D[phase_engine.py<br/>Phase return computation]
-        E[investment_analysis.py<br/>Portfolio metrics]
+        B[momentum_engine.py\nMain backtesting logic]
+        C[multi_leg_engine.py\nPattern window finder]
+        D[phase_engine.py\nPhase return computation]
+        E[investment_analysis.py\nPortfolio metrics]
     end
     
     subgraph "Data Layer"
-        F[db_provisioning.py<br/>MongoDB → DuckDB]
-        G[db_loader.py<br/>DuckDB queries]
-        H[db_config.py<br/>Configuration]
-        I[nifty500_universe.py<br/>Universe filtering]
+        F[db_provisioning.py\nMongoDB → DuckDB]
+        G[db_loader.py\nDuckDB queries]
+        H[db_config.py\nConfiguration]
+        I[nifty500_universe.py\nUniverse filtering]
     end
     
     subgraph "Quality Pipeline"
-        J[gate_system.py<br/>ARQM 3-gate]
+        J[gate_system.py\nARQM 3-gate]
     end
     
     subgraph "Export Layer"
-        K[momentum_exporter.py<br/>Excel generation]
+        K[momentum_exporter.py\nExcel generation]
     end
     
     A --> B
