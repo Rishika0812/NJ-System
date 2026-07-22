@@ -50,7 +50,7 @@ st.set_page_config(
 st.markdown("""
 <style>
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1400px; }
+.block-container { padding-top: 5rem; padding-bottom: 2rem; max-width: 1400px; }
 [data-testid="stSidebar"] {
     background: linear-gradient(180deg, #0A0A18 0%, #0D0D22 100%);
     border-right: 1px solid #1E1E3A;
