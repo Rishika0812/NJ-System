@@ -1313,7 +1313,7 @@ if strategy_mode == "Momentum Based Investment":
             for run in runs:
                 run_id = run["run_id"]
                 meta = run.get("metadata", {})
-                cfg = run.get("config", {})
+                cfg = run.get("config", {}) or {}
                 
                 # Run header
                 col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
