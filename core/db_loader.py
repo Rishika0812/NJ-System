@@ -31,6 +31,7 @@ import streamlit as st
 
 from core.db_provisioning import DB_LOCAL_PATH
 from core.nifty500_universe import filter_universe
+from core.db_config import PROJECT_ROOT
 
 # Benchmark ticker(s) as stored by the S3 main system, in preference order.
 _BENCHMARK_CANDIDATES = ["NIFTY_500", "NIFTY_50"]
@@ -38,6 +39,44 @@ _BENCHMARK_CANDIDATES = ["NIFTY_500", "NIFTY_50"]
 # Default zig-zag swing threshold (%) used to auto-generate the phase
 # schedule from the NIFTY series, per the original Dates.xlsx convention.
 DEFAULT_PHASE_THRESHOLD_PCT = 6.0
+
+# Path to NIFTY 500 index Excel file
+NIFTY500_INDEX_PATH = os.path.join(PROJECT_ROOT, "data", "Nifty500_Index.xlsx")
+
+
+@st.cache_data(show_spinner=False)
+def load_nifty500_from_excel() -> pd.DataFrame:
+    """Load NIFTY 500 index data from the Excel file.
+
+    Returns a date-indexed DataFrame with a single ``close`` column using Adj Close.
+    """
+    try:
+        df = pd.read_excel(NIFTY500_INDEX_PATH, sheet_name="Sheet1")
+        df.columns = [c.strip() for c in df.columns]
+
+        date_col = None
+        close_col = None
+        for c in df.columns:
+            cl = c.lower()
+            if "date" in cl:
+                date_col = c
+            elif "adj close" in cl or "adj_close" in cl:
+                close_col = c
+            elif cl == "close" and close_col is None:
+                close_col = c
+
+        if date_col is None or close_col is None:
+            return pd.DataFrame()
+
+        df = df[[date_col, close_col]].copy()
+        df.columns = ["date", "close"]
+        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df = df.dropna(subset=["date", "close"])
+        df = df.sort_values("date").drop_duplicates("date").set_index("date")
+        return df[["close"]]
+    except Exception:
+        return pd.DataFrame()
 
 
 def _db_mtime(db_path: str) -> float:
@@ -78,7 +117,12 @@ def load_nifty_from_db(db_path: str, _mtime: float) -> pd.DataFrame:
                 df = df.sort_values("date").drop_duplicates("date").set_index("date")
                 return df[["close"]]
 
-        # Fallback: compute synthetic market index (average stock close per date)
+        # Fallback: load NIFTY 500 from Excel file
+        df_excel = load_nifty500_from_excel()
+        if not df_excel.empty:
+            return df_excel
+
+        # Last resort: compute synthetic market index (average stock close per date)
         df_syn = con.execute(
             "SELECT date, AVG(COALESCE(adj_close, close)) AS close FROM prices "
             "GROUP BY date ORDER BY date"
