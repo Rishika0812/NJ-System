@@ -1006,11 +1006,12 @@ def generate_momentum_excel(
         # Add gate score columns if present
         if _exp_metric == "gate":
             # Gate weights from config (handle both dict and dataclass)
+            # Note: GateParams no longer uses weights; it's sequential filtration (Momentum -> Stability -> Quality)
             _gp = cfg.get("gate_params")
             if _gp:
-                mom_weight = getattr(_gp, "momentum_weight", None) if hasattr(_gp, "momentum_weight") else _gp.get("momentum_weight", 0.40)
-                qual_weight = getattr(_gp, "quality_weight", None) if hasattr(_gp, "quality_weight") else _gp.get("quality_weight", 0.40)
-                stab_weight = getattr(_gp, "stability_weight", None) if hasattr(_gp, "stability_weight") else _gp.get("stability_weight", 0.20)
+                mom_weight = getattr(_gp, "momentum_weight", 0.40) if hasattr(_gp, "momentum_weight") else 0.40
+                qual_weight = getattr(_gp, "quality_weight", 0.40) if hasattr(_gp, "quality_weight") else 0.40
+                stab_weight = getattr(_gp, "stability_weight", 0.20) if hasattr(_gp, "stability_weight") else 0.20
             else:
                 mom_weight = qual_weight = 0.40
                 stab_weight = 0.20
@@ -1041,9 +1042,9 @@ def generate_momentum_excel(
         if _exp_metric == "gate":
             _gp = cfg.get("gate_params")
             if _gp:
-                _mw = getattr(_gp, "momentum_weight", 0.40) if hasattr(_gp, "momentum_weight") else _gp.get("momentum_weight", 0.40)
-                _qw = getattr(_gp, "quality_weight", 0.40) if hasattr(_gp, "quality_weight") else _gp.get("quality_weight", 0.40)
-                _sw = getattr(_gp, "stability_weight", 0.20) if hasattr(_gp, "stability_weight") else _gp.get("stability_weight", 0.20)
+                _mw = getattr(_gp, "momentum_weight", 0.40) if hasattr(_gp, "momentum_weight") else 0.40
+                _qw = getattr(_gp, "quality_weight", 0.40) if hasattr(_gp, "quality_weight") else 0.40
+                _sw = getattr(_gp, "stability_weight", 0.20) if hasattr(_gp, "stability_weight") else 0.20
                 _weight_info = f"  ·  Weights: Momentum={_mw:.0%}, Quality={_qw:.0%}, Stability={_sw:.0%}"
             else:
                 _weight_info = "  ·  Weights: Momentum=40%, Quality=40%, Stability=20%"
