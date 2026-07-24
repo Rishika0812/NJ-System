@@ -422,12 +422,12 @@ def _prep(cycle_df, per_trade_df, eligible_ranks_df, candidates_df, leg_rank_df,
         if cfg.get("metric") == "gate":
             cd_tab = pd.DataFrame({
                 "Cycle": cd["cycle"], "CommonRank": cd.get("common_rank"), "Ticker": cd["ticker"],
-                "MomentumScore": cd.get("gate_momentum_score") if "gate_momentum_score" in cd.columns else cd.get("mean_roc"),
-                "StabilityScore": cd.get("gate_stability_score") if "gate_stability_score" in cd.columns else cd.get("mean_vol"),
-                "QualityScore": cd.get("gate_quality_score") if "gate_quality_score" in cd.columns else cd.get("mean_beta_nifty"),
-                "PassedMomentum": cd.get("gate_passed_momentum") if "gate_passed_momentum" in cd.columns else "Y",
-                "PassedStability": cd.get("gate_passed_stability") if "gate_passed_stability" in cd.columns else "Y",
-                "PassedQuality": cd.get("gate_passed_quality") if "gate_passed_quality" in cd.columns else "Y",
+                "MomentumScore": cd.get("mean_momentum_score"),
+                "StabilityScore": cd.get("mean_stability_score"),
+                "QualityScore": cd.get("mean_quality_score"),
+                "PassedMomentum": cd.get("passed_momentum") if "passed_momentum" in cd.columns else "Y",
+                "PassedStability": cd.get("passed_stability") if "passed_stability" in cd.columns else "Y",
+                "PassedQuality": cd.get("passed_quality") if "passed_quality" in cd.columns else "Y",
                 "Selected": cd.get("selected_to_buy").map(lambda v: "Y" if bool(v) else "N") if "selected_to_buy" in cd.columns else "N",
                 "Traded": cd.get("traded").map(lambda v: "Y" if bool(v) else "N") if "traded" in cd.columns else "N",
             })
@@ -465,6 +465,9 @@ def _prep(cycle_df, per_trade_df, eligible_ranks_df, candidates_df, leg_rank_df,
             if _norm_parts:
                 lr = pd.concat(_norm_parts).reset_index(drop=True)
         if cfg.get("metric") == "gate":
+            _pillar_df_cols = {f"PillarScore_{p}": lr.get(f"pillar_{p}") for p in
+                               ["profitability", "growth", "financial_strength", "cash_flow", "shareholder_return"]
+                               if f"pillar_{p}" in lr.columns}
             lr_tab = pd.DataFrame({
                 "Cycle": lr["cycle"], "Leg": lr["leg"],
                 "EntryDate": lr["entry_date"].map(_fmt_date), "ExitDate": lr["exit_date"].map(_fmt_date),
@@ -472,6 +475,7 @@ def _prep(cycle_df, per_trade_df, eligible_ranks_df, candidates_df, leg_rank_df,
                 "MomentumScore": lr.get("momentum_score"),
                 "StabilityScore": lr.get("stability_score"),
                 "QualityScore": lr.get("quality_score"),
+                **_pillar_df_cols,
                 "PassedMomentum": lr.get("passed_momentum"),
                 "PassedStability": lr.get("passed_stability"),
                 "PassedQuality": lr.get("passed_quality"),
@@ -794,15 +798,20 @@ def generate_momentum_interactive_excel(
     _cfg_vt = cfg.get("vol_type", "standard")
     
     if _cfg_metric == "gate":
-        _title(v, "Cycle Leg Rankings (Gate System Scorecards & Sequential Filtration) — auto-filtered", 12)
+        _pillar_view_cols = ([f"PillarScore_{p}" for p in
+                             ["profitability", "growth", "financial_strength", "cash_flow", "shareholder_return"]
+                             if f"PillarScore_{p}" in lr_tab.columns] if not lr_tab.empty else [])
+        _pillar_view_hdrs = [c.replace("PillarScore_", "Pillar ").replace("_", " ").title() for c in _pillar_view_cols]
+        _title(v, "Cycle Leg Rankings (Gate System Scorecards & Sequential Filtration) — auto-filtered",
+               12 + len(_pillar_view_cols))
         _filter_view(v, 3,
                      ["Leg", "Entry Date", "Exit Date", "Leg Rank", "Ticker", "Momentum Score",
-                      "Stability Score", "Quality Score", "Passed Momentum", "Passed Stability",
-                      "Passed Quality", "Bought"],
+                      "Stability Score", "Quality Score"] + _pillar_view_hdrs +
+                     ["Passed Momentum", "Passed Stability", "Passed Quality", "Bought"],
                      "tblLeg",
                      ["Leg", "EntryDate", "ExitDate", "LegRank", "Ticker", "MomentumScore",
-                      "StabilityScore", "QualityScore", "PassedMomentum", "PassedStability",
-                      "PassedQuality", "Bought"],
+                      "StabilityScore", "QualityScore"] + _pillar_view_cols +
+                     ["PassedMomentum", "PassedStability", "PassedQuality", "Bought"],
                      kmax_lr, CTRL, traded_col="Bought")
     else:
         _lr_vol_hdr = "Downside Vol" if _cfg_vt == "downside" else "Volatility"
@@ -1044,8 +1053,16 @@ def generate_momentum_interactive_excel(
             _clone_sheet(det_wb[sn], wb)
             if sn.endswith(" Detail"):
                 detail_cycle_sheets.add(sn)
-    except Exception:
-        pass
+    except Exception as e:
+        # Log the error but don't crash - create a diagnostic sheet instead
+        import traceback
+        err_ws = wb.create_sheet("⚠️ Import Error")
+        err_ws.cell(row=1, column=1, value="Failed to import detailed sheets").font = Font(bold=True, size=12, color="FF0000")
+        err_ws.cell(row=3, column=1, value=f"Error: {type(e).__name__}: {e}")
+        err_ws.cell(row=5, column=1, value="Traceback:")
+        for i, line in enumerate(traceback.format_exc().split('\n')):
+            err_ws.cell(row=6+i, column=1, value=line).font = Font(size=8)
+        err_ws.column_dimensions["A"].width = 120
 
     # ══ Hyperlink the enriched ledger's ▶ cells to each per-cycle Detail sheet ═══
     if not led.empty:

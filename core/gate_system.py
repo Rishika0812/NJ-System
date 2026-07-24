@@ -213,6 +213,16 @@ class GateParams:
     mid_cap_pct: float = 0.30
     small_cap_pct: float = 0.20
 
+    @classmethod
+    def from_dict(cls, data: dict) -> GateParams:
+        d = dict(data)
+        if "quality_factors" in d:
+            d["quality_factors"] = tuple(
+                QualityFactor(**f) if isinstance(f, dict) else f
+                for f in d["quality_factors"]
+            )
+        return cls(**d)
+
 
 DEFAULT_PARAMS = GateParams()
 
@@ -419,10 +429,13 @@ def quality_gate(quality: pd.DataFrame, eligible: list[str],
     pw = pd.Series(params.quality_pillar_weights)
     active = [p for p in pw.index if pillar_scores[p].notna().any()]
     if not active:
-        return pillar_scores, pd.Series(np.nan, index=idx)
+        return pillar_scores, pd.Series(np.nan, index=idx), pd.Series(np.nan, index=idx)
     wvec = pw[active] / pw[active].sum()
     qual = sum(pillar_scores[p] * wvec[p] for p in active)
     qual = minmax(qual) if qual.notna().any() else qual
+    
+    # Store pre-threshold score for display purposes
+    qual_pre_threshold = qual.copy()
 
     for f in params.quality_factors:
         if f.min_threshold is None or f.name not in sub.columns:
@@ -432,7 +445,7 @@ def quality_gate(quality: pd.DataFrame, eligible: list[str],
 
     if params.min_quality_score > 0:
         qual = qual[qual >= params.min_quality_score]
-    return pillar_scores, qual
+    return pillar_scores, qual, qual_pre_threshold
 
 
 def _select(score: pd.Series, mode: SelectionMode, top_pct: float, top_n: int) -> list[str]:
@@ -481,18 +494,21 @@ def rank_universe(as_of: pd.Timestamp, eligible: list[str], mf: pd.DataFrame,
     if params.enable_quality:
         if qual_cached is not None:
             qual = qual_cached.reindex(qual_eligible)
+            qual_pre_threshold = qual.copy()
         else:
-            pillars, qual = quality_gate(quality_rolled, qual_eligible, params)
+            pillars, qual, qual_pre_threshold = quality_gate(quality_rolled, qual_eligible, params)
         final_survivors = set(qual.dropna().index)
     else:
         qual = pd.Series(np.nan, index=qual_eligible)
         final_survivors = set(qual_eligible)
-
+        qual_pre_threshold = qual.copy()
+        
     out = pd.DataFrame({
         "ticker": eligible,
         "momentum_score": mom.reindex(eligible).values,
         "stability_score": stab.reindex(eligible).values,
         "quality_score": qual.reindex(eligible).values,
+        "quality_score_raw": qual_pre_threshold.reindex(eligible).values,
         "combined_score": mom.reindex(eligible).values,
         "passed_momentum": [t in mom_survivors for t in eligible],
         "passed_stability": [t in stab_survivors for t in eligible],
@@ -578,8 +594,10 @@ def run_gate_system_legs(db_path: str, db_mtime: float, phases: pd.DataFrame,
             "candidates_df": leg_rank_df, "params": params}
 
 
-def params_summary(params: GateParams = DEFAULT_PARAMS) -> pd.DataFrame:
+def params_summary(params: GateParams | dict = DEFAULT_PARAMS) -> pd.DataFrame:
     """Flat parameter table for the Export tab's "Gate Parameters" sheet."""
+    if isinstance(params, dict):
+        params = GateParams.from_dict(params)
     rows = [
         {"section": "Pipeline Controls", "parameter": "enable_momentum", "value": params.enable_momentum},
         {"section": "Pipeline Controls", "parameter": "enable_stability", "value": params.enable_stability},

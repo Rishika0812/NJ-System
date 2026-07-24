@@ -12,6 +12,10 @@ import sys
 import os
 import warnings
 import io
+import uuid
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from threading import Thread
 
 import numpy as np
 import pandas as pd
@@ -32,8 +36,46 @@ from core.investment_analysis import (
     compute_investment_analysis, fmt_inr, fmt_inr_full,
 )
 from core.momentum_engine import run_momentum
-from export.momentum_exporter import generate_momentum_excel
+from export.momentum_exporter import generate_momentum_excel, _make_run_name as mom_make_run_name
 from export.momentum_interactive import generate_momentum_interactive_excel
+from core.persistence import (
+    generate_run_id, save_config, save_metrics, save_execution_metadata,
+    save_trades_parquet, save_portfolio_nav_parquet, save_excel_report,
+    save_dataframe_parquet, load_dataframe_parquet,
+    list_runs, load_config, load_metrics, load_trades_parquet, load_portfolio_nav_parquet,
+    load_excel_report, delete_run, RESULTS_ROOT
+)
+
+
+def _make_safe_run_id(trial_name: str) -> str:
+    """Generate a filesystem-safe run_id from a user-provided trial name.
+    
+    - Sanitizes the name (removes invalid filesystem chars, replaces spaces)
+    - Appends timestamp suffix if name already exists to avoid overwrites
+    - Falls back to timestamp-based name if trial_name is empty
+    """
+    import re
+    from datetime import datetime
+    from pathlib import Path
+    
+    if not trial_name or not trial_name.strip():
+        return generate_run_id()
+    
+    # Sanitize: keep alphanumeric, hyphen, underscore; replace spaces with underscore
+    safe_name = re.sub(r'[^\w\s-]', '', trial_name.strip())
+    safe_name = re.sub(r'[\s]+', '_', safe_name)
+    safe_name = safe_name.strip('_')
+    
+    if not safe_name:
+        return generate_run_id()
+    
+    # Check for existing run with same name, append timestamp if needed
+    run_dir = RESULTS_ROOT / safe_name
+    if run_dir.exists():
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = f"{safe_name}_{ts}"
+    
+    return safe_name
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -507,6 +549,17 @@ with st.sidebar:
             mom_reinvest = st.checkbox("Reinvest profits", value=True, key="mom_re")
         st.divider()
 
+        st.caption("**Backtest Identity**")
+        mom_trial_name = st.text_input(
+            "Trial Name",
+            value="",
+            placeholder="Optional: e.g., 'ROC_Top50_Gate_v1'",
+            key="mom_trial_name",
+            help="Custom name for this backtest run. Used as the run folder name. "
+                 "If empty, a timestamp-based name is generated. "
+                 "Duplicates get a timestamp suffix to avoid overwriting."
+        )
+
         mom_run_btn = st.button("🚀 Run Momentum Analysis", type="primary",
                                 use_container_width=True)
 
@@ -621,9 +674,10 @@ if returns_df.empty:
 # ══════════════════════════════════════════════════════════════════════════════
 
 if strategy_mode == "Momentum Based Investment":
-    m_tab_overview, m_tab_cycles, m_tab_invest, m_tab_vis, m_tab_cands, m_tab_legrank, m_tab_export = st.tabs([
+    m_tab_overview, m_tab_cycles, m_tab_invest, m_tab_vis, m_tab_cands, m_tab_legrank, m_tab_export, m_tab_history = st.tabs([
         "📋 Overview", "🔁 Cycles & Trades", "💰 Investment Analysis",
         "📈 NIFTY Cycle View", "🔍 Candidates", "🏆 Leg Rankings", "⬇️ Export",
+        "📚 Previous Runs",
     ])
 
     # ── Overview (always available) ───────────────────────────────────────────
@@ -783,6 +837,53 @@ if strategy_mode == "Momentum Based Investment":
         m_vol_audit = _mres.get("vol_audit_df", pd.DataFrame())
         _m_cap      = float(_mcfg.get("capital", 100_000))
         _m_re       = bool(_mcfg.get("reinvest", True))
+
+        # ── Persist backtest results ───────────────────────────────────────────
+        if mom_run_local:
+            _run_id = _make_safe_run_id(st.session_state.get("mom_trial_name", ""))
+            try:
+                save_config(_run_id, _mcfg)
+                save_execution_metadata(_run_id, {
+                    "run_id": _run_id,
+                    "started_at": datetime.now().isoformat(),
+                    "completed_at": datetime.now().isoformat(),
+                    "status": "completed",
+                    "metric": mom_metric,
+                    "cycles": len(m_cycle) if not m_cycle.empty else 0,
+                    "trades": len(m_per_trade) if not m_per_trade.empty else 0,
+                })
+                if not m_per_trade.empty:
+                    save_trades_parquet(_run_id, m_per_trade)
+                if not m_cycle.empty:
+                    save_dataframe_parquet(_run_id, m_cycle, "cycles.parquet")
+                if not m_cands.empty:
+                    save_dataframe_parquet(_run_id, m_cands, "candidates.parquet")
+                if not m_status.empty:
+                    save_dataframe_parquet(_run_id, m_status, "status.parquet")
+                if not m_elig.empty:
+                    save_dataframe_parquet(_run_id, m_elig, "eligible_ranks.parquet")
+                if not m_legrank.empty:
+                    save_dataframe_parquet(_run_id, m_legrank, "leg_rankings.parquet")
+                if not m_audit.empty:
+                    save_dataframe_parquet(_run_id, m_audit, "audit.parquet")
+                if not m_vol_audit.empty:
+                    save_dataframe_parquet(_run_id, m_vol_audit, "vol_audit.parquet")
+                
+                # Compute portfolio NAV/equity from investment analysis
+                try:
+                    ia = compute_investment_analysis(m_per_trade, initial_capital=_m_cap, 
+                                                      alloc_mode="equal", reinvest=_m_re)
+                    if ia and "equity_curve" in ia and ia["equity_curve"] is not None:
+                        save_portfolio_nav_parquet(_run_id, ia["equity_curve"])
+                    if ia and "metrics" in ia and ia["metrics"]:
+                        save_metrics(_run_id, ia["metrics"])
+                except Exception:
+                    pass  # NAV/metrics are optional
+                
+                st.session_state["current_run_id"] = _run_id
+                st.toast(f"✅ Backtest saved (run: {_run_id})", icon="💾")
+            except Exception as e:
+                st.warning(f"Could not persist backtest: {e}")
 
         # ── Cycles & Trades ────────────────────────────────────────────────────
         with m_tab_cycles:
@@ -1092,42 +1193,253 @@ if strategy_mode == "Momentum Based Investment":
                   "Yearwise Summary, Phase Schedule, and a per-cycle detail sheet for each cycle. "
                   "(Auto-filtering works in Excel 2007+ / LibreOffice — allow recalculation when prompted.)")
             if not m_per_trade.empty:
-                if st.button("Generate Excel File", type="primary", key="mom_xl"):
-                    with st.spinner("Building workbook (this is comprehensive — a moment)..."):
-                        try:
-                            xlb = generate_momentum_interactive_excel(
-                                per_trade_df=m_per_trade, cycle_df=m_cycle,
-                                candidates_df=m_cands, status_df=m_status,
-                                phases=phases, config=_mcfg,
-                                eligible_ranks_df=m_elig, leg_rank_df=m_legrank,
-                                audit_df=m_audit, vol_audit_df=m_vol_audit,
-                                nifty_df=nifty_df, stock_dict=stock_dict,
-                                returns_df=returns_df,
-                                initial_capital=_m_cap, reinvest=_m_re)
-                            # Build descriptive filename from active settings
+                _run_id = st.session_state.get("current_run_id", generate_run_id())
+                
+                # Async export button
+                if st.button("Generate Excel File (Async)", type="primary", key="mom_xl_async"):
+                    # Prepare data for async export
+                    export_data = {
+                        "per_trade_df": m_per_trade.copy(),
+                        "cycle_df": m_cycle.copy(),
+                        "candidates_df": m_cands.copy(),
+                        "status_df": m_status.copy(),
+                        "phases": phases,
+                        "config": _mcfg.copy(),
+                        "eligible_ranks_df": m_elig.copy(),
+                        "leg_rank_df": m_legrank.copy(),
+                        "audit_df": m_audit.copy(),
+                        "vol_audit_df": m_vol_audit.copy(),
+                        "nifty_df": nifty_df.copy(),
+                        "stock_dict": {k: v.copy() for k, v in stock_dict.items()},
+                        "returns_df": returns_df.copy(),
+                        "initial_capital": _m_cap,
+                        "reinvest": _m_re,
+                    }
+                    
+                    from export.async_exporter import export_excel_async
+                    job_id = export_excel_async(_run_id, export_data, generate_momentum_interactive_excel)
+                    st.session_state["excel_job_id"] = job_id
+                    st.session_state["excel_run_id"] = _run_id
+                    st.success("✓ Excel generation started in background. Check status below.")
+                    st.rerun()
+                
+                # Show export status if job exists
+                if "excel_job_id" in st.session_state:
+                    from export.async_exporter import get_async_export_status, get_async_export_result, get_async_export_error
+                    job_id = st.session_state["excel_job_id"]
+                    status = get_async_export_status(job_id)
+                    
+                    st.write(f"**Export Status:** {status}")
+                    
+                    if status == "completed":
+                        xlb = get_async_export_result(job_id)
+                        if xlb:
+                            # Save to persistent storage
+                            try:
+                                save_excel_report(st.session_state["excel_run_id"], xlb)
+                                st.toast("✅ Excel saved to persistent storage", icon="💾")
+                            except Exception:
+                                pass
+                            
+                            # Build descriptive filename
                             from export.momentum_exporter import _make_run_name as _mrnfn
                             _rn = (_mrnfn(_mcfg)
                                    .replace(" ", "_").replace("/", "ov")
-                                   .replace("%", "pct").replace("+",""))
+                                   .replace("%", "pct").replace("+", ""))
                             _excel_filename = f"{_rn}.xlsx"
-                            st.session_state["mom_xl_bytes"]    = xlb
-                            st.session_state["mom_xl_filename"] = _excel_filename
-                            st.success("✓ Ready! Open the Dashboard and type a cycle number.")
-                        except Exception as e:
-                            st.error(f"Excel generation failed: {e}")
-                if st.session_state.get("mom_xl_bytes"):
-                    st.download_button(
-                        "⬇️ Download Excel Workbook",
-                        data=st.session_state["mom_xl_bytes"],
-                        file_name=st.session_state.get("mom_xl_filename", "momentum.xlsx"),
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary")
+                            
+                            st.download_button(
+                                "⬇️ Download Excel Workbook",
+                                data=xlb,
+                                file_name=_excel_filename,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                type="primary")
+                            st.info("✅ Export completed! The file is also saved in your backtest history.")
+                        
+                    elif status == "failed":
+                        error = get_async_export_error(job_id)
+                        st.error(f"Export failed: {error}")
+                    
+                    elif status in ("pending", "running"):
+                        st.info("⏳ Export running in background... Click to refresh.")
+                        if st.button("🔄 Refresh Status"):
+                            st.rerun()
+                
+                # Also keep the sync option for quick downloads
+                with st.expander("🔄 Synchronous Export (blocks UI)", expanded=False):
+                    if st.button("Generate Excel File (Sync)", type="secondary", key="mom_xl_sync"):
+                        with st.spinner("Building workbook (this is comprehensive — a moment)..."):
+                            try:
+                                xlb = generate_momentum_interactive_excel(
+                                    per_trade_df=m_per_trade, cycle_df=m_cycle,
+                                    candidates_df=m_cands, status_df=m_status,
+                                    phases=phases, config=_mcfg,
+                                    eligible_ranks_df=m_elig, leg_rank_df=m_legrank,
+                                    audit_df=m_audit, vol_audit_df=m_vol_audit,
+                                    nifty_df=nifty_df, stock_dict=stock_dict,
+                                    returns_df=returns_df,
+                                    initial_capital=_m_cap, reinvest=_m_re)
+                                # Build descriptive filename
+                                from export.momentum_exporter import _make_run_name as _mrnfn
+                                _rn = (_mrnfn(_mcfg)
+                                       .replace(" ", "_").replace("/", "ov")
+                                       .replace("%", "pct").replace("+", ""))
+                                _excel_filename = f"{_rn}.xlsx"
+                                st.session_state["mom_xl_bytes"] = xlb
+                                st.session_state["mom_xl_filename"] = _excel_filename
+                                st.success("✓ Ready! Open the Dashboard and type a cycle number.")
+                            except Exception as e:
+                                st.error(f"Excel generation failed: {e}")
+                    
+                    if st.session_state.get("mom_xl_bytes"):
+                        st.download_button(
+                            "⬇️ Download Excel Workbook (Sync)",
+                            data=st.session_state["mom_xl_bytes"],
+                            file_name=st.session_state.get("mom_xl_filename", "momentum.xlsx"),
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary")
             else:
                 st.info("Run the analysis first to enable export.")
-    else:
-        for _t in (m_tab_cycles, m_tab_invest, m_tab_vis, m_tab_cands, m_tab_legrank, m_tab_export):
-            with _t:
-                st.info("Configure the momentum settings in the sidebar and click "
-                        "**🚀 Run Momentum Analysis**.")
+
+    # ── Previous Runs ──────────────────────────────────────────────────────────────
+    with m_tab_history:
+        _section("Previous Backtest Runs")
+        _card("Click a run to load its results and Excel report without re-running the backtest.")
+        
+        runs = list_runs()
+        if not runs:
+            st.info("No previous backtest runs found. Run a backtest to save results.")
+        else:
+            for run in runs:
+                run_id = run["run_id"]
+                meta = run.get("metadata", {})
+                cfg = run.get("config", {})
+                
+                # Run header
+                col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                with col1:
+                    metric = cfg.get("metric", "unknown")
+                    top_n = cfg.get("top_n", "?")
+                    top_k = cfg.get("top_k", "?")
+                    st.write(f"**{run_id}**  ·  {metric}  ·  Top-{top_n}  ·  K={top_k}")
+                with col2:
+                    if meta:
+                        started = meta.get("started_at", "")
+                        if started:
+                            st.write(f"🕐 {started[:19].replace('T', ' ')}")
+                with col3:
+                    if meta:
+                        cycles = meta.get("cycles", 0)
+                        trades = meta.get("trades", 0)
+                    else:
+                        cycles = 0
+                        trades = 0
+                    st.write(f"🔁 {cycles} cycles  ·  📈 {trades} trades")
+                with col4:
+                    # Load button
+                    if st.button("Load", key=f"load_{run_id}"):
+                        # Load all data for this run
+                        try:
+                            # Load config
+                            loaded_cfg = load_config(run_id)
+                            st.session_state["mom_cfg"] = loaded_cfg
+                            
+                            # Load all result dataframes
+                            loaded_trades = load_trades_parquet(run_id)
+                            loaded_cycles = load_dataframe_parquet(run_id, "cycles.parquet")
+                            loaded_cands  = load_dataframe_parquet(run_id, "candidates.parquet")
+                            loaded_status = load_dataframe_parquet(run_id, "status.parquet")
+                            loaded_elig   = load_dataframe_parquet(run_id, "eligible_ranks.parquet")
+                            loaded_legrank = load_dataframe_parquet(run_id, "leg_rankings.parquet")
+                            loaded_audit  = load_dataframe_parquet(run_id, "audit.parquet")
+                            loaded_vol_audit = load_dataframe_parquet(run_id, "vol_audit.parquet")
+                            
+                            # Reconstruct mom_results from loaded data
+                            st.session_state["mom_results"] = {
+                                "per_trade_df": loaded_trades if loaded_trades is not None else pd.DataFrame(),
+                                "cycle_df": loaded_cycles if loaded_cycles is not None else pd.DataFrame(),
+                                "candidates_df": loaded_cands if loaded_cands is not None else pd.DataFrame(),
+                                "status_df": loaded_status if loaded_status is not None else pd.DataFrame(),
+                                "eligible_ranks_df": loaded_elig if loaded_elig is not None else pd.DataFrame(),
+                                "leg_rank_df": loaded_legrank if loaded_legrank is not None else pd.DataFrame(),
+                                "audit_df": loaded_audit if loaded_audit is not None else pd.DataFrame(),
+                                "vol_audit_df": loaded_vol_audit if loaded_vol_audit is not None else pd.DataFrame(),
+                            }
+                            
+                            # Load NAV
+                            nav_df = load_portfolio_nav_parquet(run_id)
+                            if nav_df is not None:
+                                st.session_state["mom_nav_df"] = nav_df
+                            
+                            # Load Excel report
+                            excel_bytes = load_excel_report(run_id)
+                            if excel_bytes:
+                                st.session_state["mom_xl_bytes"] = excel_bytes
+                                from export.momentum_exporter import _make_run_name as _mrnfn
+                                _rn = (_mrnfn(loaded_cfg)
+                                       .replace(" ", "_").replace("/", "ov")
+                                       .replace("%", "pct").replace("+", ""))
+                                st.session_state["mom_xl_filename"] = f"{_rn}.xlsx"
+                            
+                            st.session_state["current_run_id"] = run_id
+                            st.success(f"✅ Loaded run {run_id}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to load run: {e}")
+                    
+                    # Delete button
+                    if st.button("🗑️", key=f"delete_{run_id}", help="Delete this run"):
+                        st.session_state[f"confirm_delete_{run_id}"] = True
+                        st.rerun()
+
+                # Show details in expander
+                with st.expander(f"Details for {run_id}"):
+                    if meta:
+                        st.json(meta)
+                    if cfg:
+                        st.write("**Configuration:**")
+                        st.json(cfg)
+                
+                # Confirmation dialog for delete
+                if st.session_state.get(f"confirm_delete_{run_id}", False):
+                    st.warning(f"⚠️ Are you sure you want to delete run **{run_id}**? This action is irreversible.")
+                    cdel1, cdel2, _ = st.columns([1, 1, 4])
+                    with cdel1:
+                        if st.button("✅ Yes, delete", key=f"confirm_yes_{run_id}", type="primary"):
+                            try:
+                                deleted = delete_run(run_id)
+                                if deleted:
+                                    st.success(f"✅ Deleted run {run_id}")
+                                    # Clear confirmation state
+                                    del st.session_state[f"confirm_delete_{run_id}"]
+                                    # Clear loaded data if this was the loaded run
+                                    if st.session_state.get("current_run_id") == run_id:
+                                        for key in ["mom_results", "mom_cfg", "mom_nav_df", "mom_xl_bytes", "mom_xl_filename", "current_run_id"]:
+                                            st.session_state.pop(key, None)
+                                    st.rerun()
+                                else:
+                                    st.warning(f"⚠️ Run folder {run_id} not found (already deleted or missing). Removing from list.")
+                                    del st.session_state[f"confirm_delete_{run_id}"]
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Error deleting run: {e}")
+                                del st.session_state[f"confirm_delete_{run_id}"]
+                                st.rerun()
+                    with cdel2:
+                        if st.button("❌ Cancel", key=f"confirm_no_{run_id}"):
+                            del st.session_state[f"confirm_delete_{run_id}"]
+                            st.rerun()
+                
+                st.divider()
+            
+            # Download previously generated Excel if available
+            if "mom_xl_bytes" in st.session_state and st.session_state.get("current_run_id"):
+                st.download_button(
+                    "⬇️ Download Excel for Loaded Run",
+                    data=st.session_state["mom_xl_bytes"],
+                    file_name=st.session_state.get("mom_xl_filename", "momentum.xlsx"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
 
     st.stop()

@@ -653,6 +653,76 @@ def _write_window_analysis(workbook, windows: list[dict], freq_df: pd.DataFrame,
 # Sheet 5 — Phase Schedule
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _write_portfolio_nav(workbook, ia: dict | None):
+    """Sheet: Portfolio NAV — per-rebalance equity curve with NAV, returns, capital, cash, holdings."""
+    ws = workbook.add_worksheet("Portfolio NAV")
+    ws.freeze_panes(1, 0)
+
+    title_fmt = workbook.add_format({
+        "bold": True, "font_size": 13, "font_name": "Calibri",
+        "font_color": _HEADER_FG, "bg_color": _HEADER_BG,
+    })
+    ws.merge_range(0, 0, 0, 7, "Portfolio NAV — Rebalance-by-Rebalance Equity Curve", title_fmt)
+    ws.set_row(0, 22)
+
+    headers = [
+        "Rebalance Date", "Portfolio NAV", "Portfolio Return %",
+        "Invested Capital", "Cash Position", "Holdings Count",
+        "Cumulative Profit", "Drawdown %"
+    ]
+    _write_header_row(ws, 1, headers, workbook, None)
+
+    col_widths = [16, 18, 16, 18, 16, 14, 18, 14]
+    for i, w in enumerate(col_widths):
+        ws.set_column(i, i, w)
+
+    base_fmt = _cell_fmt(workbook)
+    alt_fmt = _cell_fmt(workbook, bg=_ALT_ROW)
+    num_fmt_c = workbook.add_format({"num_format": "#,##0.00", "font_name": "Calibri", "font_size": 9,
+                                      "border": 1, "border_color": _BORDER, "align": "right"})
+    pct_fmt_c = workbook.add_format({"num_format": "0.00", "font_name": "Calibri", "font_size": 9,
+                                      "border": 1, "border_color": _BORDER, "align": "right"})
+    green_fmt = _cell_fmt(workbook, bg=_GREEN_LIGHT, color=_GREEN_DARK, bold=True)
+    red_fmt = _cell_fmt(workbook, bg=_RED_LIGHT, color=_RED_DARK, bold=True)
+    date_fmt_c = workbook.add_format({"num_format": "dd-mmm-yyyy", "font_name": "Calibri", "font_size": 9,
+                                       "border": 1, "border_color": _BORDER, "align": "center"})
+
+    if ia is None or ia.get("window_table") is None or ia["window_table"].empty:
+        ws.write(2, 0, "Not enough completed cycles for portfolio NAV (need ≥ 2).", base_fmt)
+        return
+
+    win_table = ia["window_table"].copy()
+    if "exit_date" in win_table.columns:
+        win_table = win_table.sort_values("exit_date").reset_index(drop=True)
+
+    initial_capital = ia.get("initial_capital", 100_000.0)
+
+    for r_idx, (_, row) in enumerate(win_table.iterrows()):
+        r = r_idx + 2
+        bf = alt_fmt if r_idx % 2 else base_fmt
+
+        exit_date = row.get("exit_date")
+        nav = row.get("equity_inr", initial_capital)
+        window_ret = row.get("window_return_pct", 0.0)
+        invested_cap = row.get("per_window_capital", initial_capital)
+        n_stocks = int(row.get("n_stocks", 0) or 0)
+        cash_pos = invested_cap - (invested_cap if n_stocks > 0 else 0)
+        cum_profit = row.get("cumulative_profit_inr", 0.0)
+
+        # Calculate drawdown from peak NAV
+        prev_nav = win_table.loc[:r_idx, "equity_inr"].max() if r_idx > 0 else initial_capital
+        dd_pct = round((nav - prev_nav) / prev_nav * 100, 2) if prev_nav > 0 else 0.0
+
+        ws.write_datetime(r, 0, pd.Timestamp(exit_date).to_pydatetime() if pd.notna(exit_date) else None, date_fmt_c)
+        ws.write_number(r, 1, float(nav), num_fmt_c)
+        ws.write_number(r, 2, float(window_ret), pct_fmt_c)
+        ws.write_number(r, 3, float(invested_cap), num_fmt_c)
+        ws.write_number(r, 4, float(cash_pos), num_fmt_c)
+        ws.write_number(r, 5, n_stocks, workbook.add_format({"font_name": "Calibri", "font_size": 9, "border": 1, "border_color": _BORDER, "align": "center"}))
+        ws.write_number(r, 6, float(cum_profit), green_fmt if cum_profit >= 0 else red_fmt)
+        ws.write_number(r, 7, float(dd_pct), red_fmt if dd_pct < 0 else green_fmt)
+
+
 def _write_phase_schedule(workbook, phases: pd.DataFrame):
     ws = workbook.add_worksheet("Phase Schedule")
     ws.freeze_panes(1, 0)
@@ -1726,6 +1796,7 @@ def generate_excel(
             _ia = None
 
         _write_portfolio_summary(workbook, per_trade_df, summary_df, config, window_status_df)
+        _write_portfolio_nav(workbook, _ia)
         _write_portfolio_stats(workbook, _ia)
         _write_yearwise_analysis(workbook, _ia)
         _write_trade_pnl(workbook, _ia)

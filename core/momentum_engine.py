@@ -533,14 +533,14 @@ def _common_from_legs(
     _mf_g, _qual_rolled_g, _qual_cached_g, _gp = None, None, None, None
     if metric == "gate":
         import os
-        from core.gate_system import rank_universe, load_market_features, load_quality_features, _rollup_quality, quality_gate, DEFAULT_PARAMS
+        from core.gate_system import rank_universe, load_market_features, load_quality_features, _rollup_quality, DEFAULT_PARAMS
         _gp = gate_params or DEFAULT_PARAMS
         _db_p = db_path or os.path.join("storage", "market_data.duckdb")
         _m_time = os.path.getmtime(_db_p) if os.path.exists(_db_p) else 0.0
         _mf_g = load_market_features(_db_p, _m_time)
         _qual_raw_g = load_quality_features(_db_p, _m_time)
         _qual_rolled_g = _rollup_quality(_qual_raw_g, _gp)
-        _, _qual_cached_g = quality_gate(_qual_rolled_g, eff, _gp)
+        _qual_cached_g = None
 
     legs = []
     audit_rows = []
@@ -757,6 +757,9 @@ def _common_from_legs(
                      "sd_over_dv_map": sd_over_dv_map,
                      "sd_std_vol_map": sd_std_vol_map,
                      "sd_dv_vol_map": sd_dv_vol_map,
+                     "gate_map": gate_map,
+                     "gate_rank": gate_rank,
+                     "gate_scorecard": gate_scorecard,
                      "roc_rank": roc_rank, "vol_rank": vol_rank,
                      "prod_rank": prod_rank, "roc_over_vol_rank": roc_over_vol_rank,
                      "beta_rank": beta_rank,
@@ -845,6 +848,7 @@ def _common_from_legs(
     for tkr in common:
         row = {"ticker": tkr}
         rocs, vols, prods, rovs, betas, corrs, bovs, bxvs, sods, gates = [], [], [], [], [], [], [], [], [], []
+        g_moms, g_stabs, g_quals = [], [], []
         for L in legs:
             lbl = L["label"]
             rv = L["roc_map"].get(tkr)
@@ -880,6 +884,13 @@ def _common_from_legs(
                 for _k, _v in _g_sc.items():
                     if _k not in ("ticker", "combined_score", "selected", "rank", "as_of", "phase_id", "trade", "entry_date", "exit_date"):
                         row[f"{lbl} | gate_{_k}"] = round(float(_v), 4) if pd.notna(_v) else None
+                # Collect quality_score_raw (pre-threshold) first, fallback to quality_score
+                _g_ms = _g_sc.get("momentum_score")
+                _g_ss = _g_sc.get("stability_score")
+                _g_qs = _g_sc.get("quality_score_raw") if pd.notna(_g_sc.get("quality_score_raw")) else _g_sc.get("quality_score")
+                if pd.notna(_g_ms): g_moms.append(float(_g_ms))
+                if pd.notna(_g_ss): g_stabs.append(float(_g_ss))
+                if pd.notna(_g_qs): g_quals.append(float(_g_qs))
             if rv is not None:
                 rocs.append(rv)
             if vv is not None:
@@ -910,6 +921,9 @@ def _common_from_legs(
         row["mean_beta_x_vol"] = round(float(np.mean(bxvs)), 6) if bxvs else None
         row["mean_sd_over_dv"] = round(float(np.mean(sods)), 6) if sods else None
         row["mean_gate"] = round(float(np.mean(gates)), 6) if gates else None
+        row["mean_momentum_score"] = round(float(np.mean(g_moms)), 4) if g_moms else None
+        row["mean_stability_score"] = round(float(np.mean(g_stabs)), 4) if g_stabs else None
+        row["mean_quality_score"] = round(float(np.mean(g_quals)), 4) if g_quals else None
         rows.append(row)
 
     detail = pd.DataFrame(rows)
@@ -1053,14 +1067,14 @@ def _leg_full_rank_rows(cycle_no, leg_specs, returns_df, stock_dict,
     _mf_g, _qual_rolled_g, _qual_cached_g, _gp = None, None, None, None
     if metric == "gate":
         import os
-        from core.gate_system import rank_universe, load_market_features, load_quality_features, _rollup_quality, quality_gate, DEFAULT_PARAMS
+        from core.gate_system import rank_universe, load_market_features, load_quality_features, _rollup_quality, DEFAULT_PARAMS
         _gp = gate_params or DEFAULT_PARAMS
         _db_p = db_path or os.path.join("storage", "market_data.duckdb")
         _m_time = os.path.getmtime(_db_p) if os.path.exists(_db_p) else 0.0
         _mf_g = load_market_features(_db_p, _m_time)
         _qual_raw_g = load_quality_features(_db_p, _m_time)
         _qual_rolled_g = _rollup_quality(_qual_raw_g, _gp)
-        _, _qual_cached_g = quality_gate(_qual_rolled_g, eff, _gp)
+        _qual_cached_g = None
 
     rows = []
     for leg in leg_specs:
@@ -1172,14 +1186,11 @@ def _leg_full_rank_rows(cycle_no, leg_specs, returns_df, stock_dict,
         elif metric == "gate" and _mf_g is not None:
             _as_of_g = pd.Timestamp(leg.get("as_of") or leg["exit"])
             _sc_g = rank_universe(_as_of_g, eff, _mf_g, _qual_rolled_g, _gp, qual_cached=_qual_cached_g)
-            _gmap_lr = {}
             _sc_dict = {}
             if not _sc_g.empty:
                 _sc_dict = _sc_g.set_index("ticker").to_dict(orient="index")
-                for _, r in _sc_g.iterrows():
-                    if pd.notna(r["combined_score"]):
-                        _gmap_lr[r["ticker"]] = float(r["combined_score"])
-            order = [t for t, _ in sorted(_gmap_lr.items(), key=lambda kv: kv[1], reverse=_desc)][:n]
+                _rank_map = {row["ticker"]: row["rank"] for _, row in _sc_g.iterrows()}
+            order = [t for t, _ in sorted(_rank_map.items(), key=lambda kv: kv[1])][:n]
         else:
             _sc_dict = {}
             order = [t for t, _ in sorted(roc_map.items(), key=lambda kv: kv[1], reverse=_desc)][:n]
@@ -1203,10 +1214,18 @@ def _leg_full_rank_rows(cycle_no, leg_specs, returns_df, stock_dict,
             _g_info = _sc_dict.get(tkr, {})
             _g_mom_sc  = (round(float(_g_info["momentum_score"]), 4) if (_g_info and pd.notna(_g_info.get("momentum_score"))) else None)
             _g_stab_sc = (round(float(_g_info["stability_score"]), 4) if (_g_info and pd.notna(_g_info.get("stability_score"))) else None)
-            _g_qual_sc = (round(float(_g_info["quality_score"]), 4) if (_g_info and pd.notna(_g_info.get("quality_score"))) else None)
+            # Use quality_score_raw (pre-threshold) when quality_score is masked to NaN
+            _g_qual_sc = (round(float(_g_info["quality_score"]), 4) if (_g_info and pd.notna(_g_info.get("quality_score"))) 
+                          else (round(float(_g_info["quality_score_raw"]), 4) if (_g_info and pd.notna(_g_info.get("quality_score_raw"))) else None))
             _g_pm      = ("Y" if _g_info.get("passed_momentum") else "N") if _g_info else "N"
             _g_ps      = ("Y" if _g_info.get("passed_stability") else "N") if _g_info else "N"
             _g_pq      = ("Y" if _g_info.get("passed_quality") else "N") if _g_info else "N"
+
+            _g_pillars = {}
+            if _g_info:
+                for _pk, _pv in _g_info.items():
+                    if _pk.startswith("pillar_") and pd.notna(_pv):
+                        _g_pillars[_pk] = round(float(_pv), 4)
 
             rows.append({
                 "cycle": cycle_no + 1, "window": cycle_no + 1,
@@ -1228,6 +1247,7 @@ def _leg_full_rank_rows(cycle_no, leg_specs, returns_df, stock_dict,
                 "momentum_score": _g_mom_sc,
                 "stability_score": _g_stab_sc,
                 "quality_score": _g_qual_sc,
+                **{_k: _v for _k, _v in _g_pillars.items()},
                 "passed_momentum": _g_pm,
                 "passed_stability": _g_ps,
                 "passed_quality": _g_pq,
@@ -1634,7 +1654,7 @@ def run_momentum(
             top_n, top_k_common,
             vol_pct=vol_pct, selection_side=selection_side,
             allowed=effective_allowed, vol_scores=vol_scores, vol_type=vol_type,
-            nifty_df=nifty_df)
+            nifty_df=nifty_df, gate_params=gate_params, db_path=db_path)
         cmeta["vol_filter"] = vol_filter if not use_fixed_fall else "off"
         cmeta["vol_filter_basis"] = vol_filter_basis
         cmeta["n_effective_universe"] = len(effective_allowed)
@@ -1837,7 +1857,7 @@ def run_momentum(
         if metric != "off":
             leg_rank_rows.extend(_leg_full_rank_rows(
                 cycle_no, leg_specs, returns_df, stock_dict, metric, vol_direction,
-                top_n, winrank, set(common), traded, allowed=effective_allowed,
+                top_n, winrank, set(common), traded, allowed=None if metric == "gate" else effective_allowed,
                 vol_type=vol_type, selection_side=selection_side, nifty_df=nifty_df,
                 gate_params=gate_params, db_path=db_path))
         else:

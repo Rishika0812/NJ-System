@@ -246,6 +246,7 @@ def _window_leg_rankings(windows, returns_df, stock_dict, pattern, cfg,
                    "trade": ttype}
             roc_map = _leg_roc_map(returns_df, leg, stock_dict, all_tk)
             vol_map = _leg_vol_map(stock_dict, all_tk, win["entry_dates"][li], win["exit_dates"][li], vol_type)
+            _sc_pillar_map = {}
             if metric == "vol":
                 # BUG FIX v30: vol sort uses vol_dir only, not inverted by selection side
                 asc = (vol_dir == "low")
@@ -259,8 +260,10 @@ def _window_leg_rankings(windows, returns_df, stock_dict, pattern, cfg,
                 order = [t for t, _ in sorted(rov.items(), key=lambda kv: kv[1], reverse=_desc)][:nn]
             elif metric == "gate":
                 import os
-                from core.gate_system import rank_universe, load_market_features, load_quality_features, _rollup_quality, DEFAULT_PARAMS
+                from core.gate_system import rank_universe, load_market_features, load_quality_features, _rollup_quality, DEFAULT_PARAMS, GateParams
                 _gp = cfg.get("gate_params") or DEFAULT_PARAMS
+                if isinstance(_gp, dict):
+                    _gp = GateParams.from_dict(_gp)
                 _db = cfg.get("db_path") or os.path.join("storage", "market_data.duckdb")
                 _m = os.path.getmtime(_db) if os.path.exists(_db) else 0.0
                 _mf = load_market_features(_db, _m)
@@ -268,6 +271,15 @@ def _window_leg_rankings(windows, returns_df, stock_dict, pattern, cfg,
                 _qroll = _rollup_quality(_qr, _gp)
                 _sc = rank_universe(pd.Timestamp(win["entry_dates"][li]), all_tk, _mf, _qroll, _gp)
                 _gmap = {r["ticker"]: r["combined_score"] for _, r in _sc.iterrows() if pd.notna(r["combined_score"])}
+                _pillar_cols_in_sc = [c for c in _sc.columns if c.startswith("pillar_")]
+                _gate_score_cols = [c for c in ["momentum_score", "stability_score", "quality_score"] if c in _sc.columns]
+                for _, r in _sc.iterrows():
+                    entry = {col: round(float(r[col]), 4) for col in _pillar_cols_in_sc if pd.notna(r[col])}
+                    for c in _gate_score_cols:
+                        v = r.get(c)
+                        if pd.notna(v):
+                            entry[c] = round(float(v), 4)
+                    _sc_pillar_map[r["ticker"]] = entry
                 order = [t for t, _ in sorted(_gmap.items(), key=lambda kv: kv[1], reverse=_desc)][:nn]
             else:
                 order = [t for t, _ in sorted(roc_map.items(), key=lambda kv: kv[1], reverse=_desc)][:nn]
@@ -280,7 +292,7 @@ def _window_leg_rankings(windows, returns_df, stock_dict, pattern, cfg,
                        else rv * vv if (metric == "volxroc" and rv is not None and vv is not None)
                        else vv if metric == "vol"
                        else rv)
-                rows.append({
+                row = {
                     "window": w,
                     "leg": f"Leg {li+1} ({ttype})",
                     "entry_date": win["entry_dates"][li],
@@ -290,10 +302,14 @@ def _window_leg_rankings(windows, returns_df, stock_dict, pattern, cfg,
                     "roc_value": rv,
                     "vol_value": vv,
                     "metric_score": (round(float(_ms), 6) if _ms is not None else None),
+                }
+                row.update(_sc_pillar_map.get(tkr, {}))
+                row.update({
                     "window_rank": wr if wr is not None else "",
                     "common": "✓" if tkr in common_map.get(w, set()) else "",
                     "bought": "✓" if tkr in bought_map.get(w, set()) else "",
                 })
+                rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -969,13 +985,46 @@ def generate_momentum_excel(
             "beta_over_vol": "Beta/Vol Score",
             "beta_x_vol":   "Beta×Vol Score",
             "sd_over_dv":   "Std/Downside Ratio",
+            "gate":         "Final Quality Score",
         }.get(_exp_metric, "Score")
+        
+        # Gate score columns (only present when metric == "gate")
+        score_cols = ["momentum_score", "stability_score", "quality_score"]
+        gate_cols = [c for c in disp.columns if c in score_cols or c.startswith("pillar_")]
+        momentum_gate_cols = [c for c in score_cols if c == "momentum_score" and c in disp.columns]
+        stability_gate_cols = [c for c in score_cols if c == "stability_score" and c in disp.columns]
+        quality_gate_cols = [c for c in score_cols if c == "quality_score" and c in disp.columns]
+        pillar_cols = [c for c in disp.columns if c.startswith("pillar_")]
+        
         keep = [c for c in ["cycle", "window", "leg", "entry_date", "exit_date",
                 "leg_rank", "ticker", "roc_value", "vol_value",
                 "sd_std_vol", "sd_dv_vol", "metric_score",
                 "beta_nifty", "corr_nifty", "beta_rank",
                 "window_rank", "common", "bought"]
                 if c in disp.columns]
+        
+        # Add gate score columns if present
+        if _exp_metric == "gate":
+            # Gate weights from config (handle both dict and dataclass)
+            _gp = cfg.get("gate_params")
+            if _gp:
+                mom_weight = getattr(_gp, "momentum_weight", None) if hasattr(_gp, "momentum_weight") else _gp.get("momentum_weight", 0.40)
+                qual_weight = getattr(_gp, "quality_weight", None) if hasattr(_gp, "quality_weight") else _gp.get("quality_weight", 0.40)
+                stab_weight = getattr(_gp, "stability_weight", None) if hasattr(_gp, "stability_weight") else _gp.get("stability_weight", 0.20)
+            else:
+                mom_weight = qual_weight = 0.40
+                stab_weight = 0.20
+            
+            # Add momentum/stability/quality scores first
+            for sc in score_cols:
+                if sc in disp.columns and sc not in keep:
+                    keep.append(sc)
+            
+            # Add pillar score columns for quality breakdown
+            for c in disp.columns:
+                if c.startswith("pillar_") and c not in keep:
+                    keep.append(c)
+        
         disp = disp[keep].rename(columns=lambda c: c.replace("_", " ").title())
         # Override specific column names for clarity
         disp = disp.rename(columns={
@@ -983,8 +1032,24 @@ def generate_momentum_excel(
             "Metric Score": _exp_score_lbl,
             "Sd Std Vol":   "Std Volatility",
             "Sd Dv Vol":    "Downside Volatility",
+            "Momentum Score": "Momentum Gate Score",
+            "Stability Score": "Stability Gate Score",
+            "Quality Score": "Quality Gate Score",
         })
-        if cfg.get("metric") == "off":
+        
+        # Add gate weight info to title when gate system is active
+        if _exp_metric == "gate":
+            _gp = cfg.get("gate_params")
+            if _gp:
+                _mw = getattr(_gp, "momentum_weight", 0.40) if hasattr(_gp, "momentum_weight") else _gp.get("momentum_weight", 0.40)
+                _qw = getattr(_gp, "quality_weight", 0.40) if hasattr(_gp, "quality_weight") else _gp.get("quality_weight", 0.40)
+                _sw = getattr(_gp, "stability_weight", 0.20) if hasattr(_gp, "stability_weight") else _gp.get("stability_weight", 0.20)
+                _weight_info = f"  ·  Weights: Momentum={_mw:.0%}, Quality={_qw:.0%}, Stability={_sw:.0%}"
+            else:
+                _weight_info = "  ·  Weights: Momentum=40%, Quality=40%, Stability=20%"
+            _title(ws5, f"Cycle Leg Rankings — Gate System (ARQM)  ·  Momentum Gate → Stability Gate → Quality Gate{_weight_info}"
+                   + "  ·  Shows Momentum/Stability/Quality Gate Scores, Final Score = Σ(Score × Weight)  ·  ✓ = passed gate / bought", len(disp.columns))
+        elif cfg.get("metric") == "off":
             _sn2 = "Bot-N" if cfg.get("selection_side", "top") == "bottom" else "Top-N"
             _wdays = cfg.get("vf_windows", [("buy", 100)])[0][1] if cfg.get("vf_windows") else 100
             _title(ws5, f"Volatility Window Rankings — {_sn2} per {_wdays}-day window by ln "
@@ -1153,6 +1218,24 @@ def generate_momentum_excel(
     else:
         _title(ws12, "Phase Schedule", 2)
         ws12.cell(row=3, column=1, value="(no phases)")
+
+    # ══ ⑬ Portfolio NAV ═══════════════════════════════════════════════════════════
+
+    ws13 = wb.create_sheet("Portfolio NAV")
+    if ia is not None and not ia["window_table"].empty:
+        wt = ia["window_table"].copy()
+        if "exit_date" in wt.columns:
+            wt = wt.sort_values("exit_date").reset_index(drop=True)
+        wt["exit_date"] = wt["exit_date"].map(_fmt_date)
+        nav_df = pd.DataFrame({
+            "Rebalance Date": wt["exit_date"],
+            "NAV": (wt["equity_inr"] / initial_capital).round(6)
+        })
+        _title(ws13, "Portfolio NAV — Rebalance Date & NAV (Equity / Initial Capital)", 2)
+        _write_df(ws13, nav_df, 3)
+    else:
+        _title(ws13, "Portfolio NAV", 2)
+        ws13.cell(row=3, column=1, value="(needs ≥ 2 completed cycles)")
 
     # ══ Per-cycle DETAIL sheets (linked from the Cycle Ledger) ═══════════════════
     if detail_cycles:
