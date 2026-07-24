@@ -711,7 +711,7 @@ def _common_from_legs(
                 sd_over_dv_sel = {t for t, _ in _sod_sorted[:n]}
 
         # ── Gate System (ARQM 3-gate pipeline: Momentum + Stability + Quality) ──
-        gate_map, gate_rank, gate_sel = {}, {}, set()
+        gate_map, gate_rank, gate_sel, gate_scorecard = {}, {}, set(), {}
         gate_scorecard = {}
         if metric == "gate" and _mf_g is not None:
             _as_of_g = pd.Timestamp(leg.get("as_of") or leg["exit"])
@@ -1122,6 +1122,10 @@ def _leg_full_rank_rows(cycle_no, leg_specs, returns_df, stock_dict,
         else:
             _leg_start_b = pd.Timestamp(leg["entry"])
         _beta_map_lr, _beta_rank_lr = {}, {}
+        _sc_dict = {}
+        _sod_map_lr = {}
+        _std_vmap_lr = {}
+        _dv_vmap_lr = {}
         if nifty_df is not None and not nifty_df.empty:
             for _t in eff:
                 _stk = stock_dict.get(_t)
@@ -1164,7 +1168,6 @@ def _leg_full_rank_rows(cycle_no, leg_specs, returns_df, stock_dict,
                         for t in _beta_map_lr if t in vol_map and vol_map[t] is not None}
             order = [t for t, _ in sorted(_bxv_map.items(), key=lambda kv: kv[1], reverse=_desc)][:n]
         elif metric == "sd_over_dv":
-            _sod_map_lr, _std_vmap_lr, _dv_vmap_lr = {}, {}, {}
             for _t in eff:
                 _stk_lr = stock_dict.get(_t)
                 if _stk_lr is None:
@@ -1186,13 +1189,12 @@ def _leg_full_rank_rows(cycle_no, leg_specs, returns_df, stock_dict,
         elif metric == "gate" and _mf_g is not None:
             _as_of_g = pd.Timestamp(leg.get("as_of") or leg["exit"])
             _sc_g = rank_universe(_as_of_g, eff, _mf_g, _qual_rolled_g, _gp, qual_cached=_qual_cached_g)
-            _sc_dict = {}
+            _rank_map = {}
             if not _sc_g.empty:
                 _sc_dict = _sc_g.set_index("ticker").to_dict(orient="index")
                 _rank_map = {row["ticker"]: row["rank"] for _, row in _sc_g.iterrows()}
             order = [t for t, _ in sorted(_rank_map.items(), key=lambda kv: kv[1])][:n]
         else:
-            _sc_dict = {}
             order = [t for t, _ in sorted(roc_map.items(), key=lambda kv: kv[1], reverse=_desc)][:n]
 
         for i, tkr in enumerate(order):
