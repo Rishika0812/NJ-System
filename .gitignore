@@ -43,6 +43,9 @@ data/*.parquet
 data/*.csv
 data/*.json
 
+# Storage folder
+storage/
+
 # Logs
 *.log
 logs/

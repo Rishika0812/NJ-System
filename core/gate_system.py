@@ -398,11 +398,11 @@ def stability_gate(mf_asof: pd.DataFrame, eligible: list[str], params: GateParam
 
 
 def quality_gate(quality: pd.DataFrame, eligible: list[str],
-                  params: GateParams) -> tuple[dict[str, pd.Series], pd.Series]:
+                  params: GateParams) -> tuple[dict[str, pd.Series], pd.Series, pd.Series]:
     """Full-parity quality pillar scoring (verbatim logic from S3-main's quality_gate)."""
     idx = pd.Index(eligible)
     if quality.empty:
-        return {}, pd.Series(np.nan, index=idx)
+        return {}, pd.Series(np.nan, index=idx), pd.Series(np.nan, index=idx)
     sub = quality.reindex(idx)
 
     pillar_norm: dict[str, list[pd.Series]] = {p: [] for p in params.quality_pillar_weights}
