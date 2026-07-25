@@ -58,3 +58,5 @@ exports/
 # Cache
 .cache/
 *.cache
+
+results/

@@ -43,7 +43,7 @@ from core.persistence import (
     save_trades_parquet, save_portfolio_nav_parquet, save_excel_report,
     save_dataframe_parquet, load_dataframe_parquet,
     list_runs, load_config, load_metrics, load_trades_parquet, load_portfolio_nav_parquet,
-    load_excel_report, delete_run, RESULTS_ROOT
+    load_excel_report, delete_run, delete_all_runs, RESULTS_ROOT
 )
 
 
@@ -1310,6 +1310,30 @@ if strategy_mode == "Momentum Based Investment":
         if not runs:
             st.info("No previous backtest runs found. Run a backtest to save results.")
         else:
+            del_col1, del_col2 = st.columns([1, 6])
+            with del_col1:
+                if st.button("🗑️ Delete All", type="secondary", help="Delete all previous runs"):
+                    st.session_state["confirm_delete_all"] = True
+            if st.session_state.get("confirm_delete_all", False):
+                st.warning("⚠️ **Delete ALL backtest runs?** This action is irreversible.")
+                c1, c2, _ = st.columns([1, 1, 4])
+                with c1:
+                    if st.button("✅ Yes, delete all", key="del_all_yes", type="primary"):
+                        n = delete_all_runs()
+                        st.success(f"✅ Deleted {n} run(s)")
+                        st.session_state.pop("confirm_delete_all", None)
+                        st.session_state.pop("mom_results", None)
+                        st.session_state.pop("mom_cfg", None)
+                        st.session_state.pop("mom_nav_df", None)
+                        st.session_state.pop("mom_xl_bytes", None)
+                        st.session_state.pop("mom_xl_filename", None)
+                        st.session_state.pop("current_run_id", None)
+                        st.rerun()
+                with c2:
+                    if st.button("❌ Cancel", key="del_all_no"):
+                        st.session_state.pop("confirm_delete_all", None)
+                        st.rerun()
+
             for run in runs:
                 run_id = run["run_id"]
                 meta = run.get("metadata", {})

@@ -193,6 +193,17 @@ def delete_run(run_id: str) -> bool:
     return True
 
 
+def delete_all_runs() -> int:
+    """Delete all backtest run directories. Returns the number deleted."""
+    import shutil
+    count = 0
+    for run_dir in RESULTS_ROOT.iterdir():
+        if run_dir.is_dir():
+            shutil.rmtree(run_dir)
+            count += 1
+    return count
+
+
 def _json_serializable(obj: Any) -> Any:
     """Convert objects to JSON-serializable form."""
     if isinstance(obj, (str, int, float, bool, type(None))):

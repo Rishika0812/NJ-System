@@ -227,7 +227,6 @@ class GateParams:
 DEFAULT_PARAMS = GateParams()
 
 
-@st.cache_data(show_spinner=False)
 def load_market_cap_categories(db_path: str, _mtime: float) -> dict[str, str]:
     """Map bare NSE symbol -> 'Large Cap' | 'Mid Cap' | 'Small Cap'.
     Large Cap = Top 100, Mid Cap = Ranks 101-250, Small Cap = Ranks 251-500.
@@ -288,7 +287,6 @@ def _table_exists(con, name: str) -> bool:
         return False
 
 
-@st.cache_data(show_spinner=False)
 def load_market_features(db_path: str, _mtime: float,
                           columns: tuple = ("beta", "momentum_unscaled")) -> pd.DataFrame:
     """Daily ``feature_store`` rows (ticker, date, beta, momentum_unscaled, ...).
@@ -316,7 +314,6 @@ def load_market_features(db_path: str, _mtime: float,
         con.close()
 
 
-@st.cache_data(show_spinner=False)
 def load_quality_features(db_path: str, _mtime: float) -> pd.DataFrame:
     """Latest-per-ticker quality snapshot from ``fundamental_quality_features``,
     rolled up per ``params.quality_rollup`` (default: median across years)."""
@@ -353,7 +350,14 @@ def _rollup_quality(raw: pd.DataFrame, params: GateParams) -> pd.DataFrame:
     if "financial_year" in q.columns:
         q = q.sort_values(["ticker", "financial_year"]).groupby("ticker").tail(1)
     q = q.set_index("ticker")
-    rename = {c: c.replace("_median", "").replace("_weighted", "") for c in q.columns}
+    factor_names = {f.name for f in params.quality_factors}
+    rename = {}
+    for c in q.columns:
+        if c in factor_names:
+            continue
+        base = c.replace("_median", "").replace("_weighted", "")
+        if base != c and base in factor_names:
+            rename[c] = base
     return q.rename(columns=rename)
 
 
@@ -552,7 +556,7 @@ def run_gate_system_legs(db_path: str, db_mtime: float, phases: pd.DataFrame,
     if phases is None or phases.empty or not eligible_tickers:
         return empty
 
-    mf = load_market_features(db_path, db_mtime)
+    mf = load_market_features(db_path, db_mtime, columns=("beta", "momentum_unscaled", "momentum_scaled"))
     quality_raw = load_quality_features(db_path, db_mtime)
     quality_rolled = _rollup_quality(quality_raw, params)
 

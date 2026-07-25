@@ -537,7 +537,7 @@ def _common_from_legs(
         _gp = gate_params or DEFAULT_PARAMS
         _db_p = db_path or os.path.join("storage", "market_data.duckdb")
         _m_time = os.path.getmtime(_db_p) if os.path.exists(_db_p) else 0.0
-        _mf_g = load_market_features(_db_p, _m_time)
+        _mf_g = load_market_features(_db_p, _m_time, columns=("beta", "momentum_unscaled", "momentum_scaled", "semi_deviation"))
         _qual_raw_g = load_quality_features(_db_p, _m_time)
         _qual_rolled_g = _rollup_quality(_qual_raw_g, _gp)
         _qual_cached_g = None
@@ -1071,7 +1071,7 @@ def _leg_full_rank_rows(cycle_no, leg_specs, returns_df, stock_dict,
         _gp = gate_params or DEFAULT_PARAMS
         _db_p = db_path or os.path.join("storage", "market_data.duckdb")
         _m_time = os.path.getmtime(_db_p) if os.path.exists(_db_p) else 0.0
-        _mf_g = load_market_features(_db_p, _m_time)
+        _mf_g = load_market_features(_db_p, _m_time, columns=("beta", "momentum_unscaled", "momentum_scaled"))
         _qual_raw_g = load_quality_features(_db_p, _m_time)
         _qual_rolled_g = _rollup_quality(_qual_raw_g, _gp)
         _qual_cached_g = None
@@ -1357,7 +1357,6 @@ def _build_fixed_fall_leg_specs(peak_date, trough_date,
 # Main run_momentum
 # ─────────────────────────────────────────────────────────────────────────────
 
-@st.cache_data(show_spinner=False)
 def run_momentum(
     _nifty_df: pd.DataFrame,
     _stock_dict: dict,

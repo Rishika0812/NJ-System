@@ -1,0 +1,151 @@
+{
+  "pattern": [
+    "Rise",
+    "Fall"
+  ],
+  "metric": "gate",
+  "vol_dir": "low",
+  "vol_type": "standard",
+  "top_n": 150,
+  "top_k": 50,
+  "nifty_pct": 5.0,
+  "fall": 10.0,
+  "leg_count": 2,
+  "max_hold": 5.0,
+  "vol_pct": 25,
+  "selection_side": "bottom",
+  "vol_filter": "off",
+  "vol_filter_n": 50,
+  "vf_windows": [],
+  "vol_filter_lookback_days": 100,
+  "use_fixed_fall": true,
+  "fall_entry_days": 100,
+  "fall_exit_days": 100,
+  "exact_trigger_mode": false,
+  "start_date": "2016-01-01",
+  "end_date": "2026-05-29",
+  "buy_on_start_date": true,
+  "capital": 100000.0,
+  "reinvest": true,
+  "gate_params": {
+    "enable_momentum": true,
+    "enable_stability": true,
+    "enable_quality": true,
+    "momentum_column": "momentum_scaled",
+    "momentum_normalization": "percentile",
+    "stability_column": "beta",
+    "stability_normalization": "percentile",
+    "quality_factors": [
+      {
+        "name": "roe",
+        "pillar": "profitability",
+        "weight": 1.0,
+        "min_threshold": 0.12
+      },
+      {
+        "name": "roce",
+        "pillar": "profitability",
+        "weight": 1.0,
+        "min_threshold": 0.12
+      },
+      {
+        "name": "roa",
+        "pillar": "profitability",
+        "weight": 0.8,
+        "min_threshold": 0.08
+      },
+      {
+        "name": "cash_roce",
+        "pillar": "profitability",
+        "weight": 0.8,
+        "min_threshold": 0.1
+      },
+      {
+        "name": "eps_growth_weighted",
+        "pillar": "growth",
+        "weight": 1.0,
+        "min_threshold": null
+      },
+      {
+        "name": "revenue_growth_weighted",
+        "pillar": "growth",
+        "weight": 1.0,
+        "min_threshold": null
+      },
+      {
+        "name": "roe_growth_weighted",
+        "pillar": "growth",
+        "weight": 0.8,
+        "min_threshold": null
+      },
+      {
+        "name": "roce_growth_weighted",
+        "pillar": "growth",
+        "weight": 0.8,
+        "min_threshold": null
+      },
+      {
+        "name": "dps_growth_weighted",
+        "pillar": "growth",
+        "weight": 0.6,
+        "min_threshold": null
+      },
+      {
+        "name": "sustainable_growth_rate",
+        "pillar": "growth",
+        "weight": 0.8,
+        "min_threshold": null
+      },
+      {
+        "name": "interest_coverage_ratio",
+        "pillar": "financial_strength",
+        "weight": 1.0,
+        "min_threshold": 1.5
+      },
+      {
+        "name": "equity_to_total_capital",
+        "pillar": "financial_strength",
+        "weight": 1.0,
+        "min_threshold": 0.4
+      },
+      {
+        "name": "ocf_to_ebitda",
+        "pillar": "cash_flow",
+        "weight": 1.0,
+        "min_threshold": 0.1
+      },
+      {
+        "name": "dividend_payout_ratio",
+        "pillar": "shareholder_return",
+        "weight": 0.6,
+        "min_threshold": null
+      },
+      {
+        "name": "dividend_payout_ratio_cumulative",
+        "pillar": "shareholder_return",
+        "weight": 0.5,
+        "min_threshold": null
+      }
+    ],
+    "quality_pillar_weights": {
+      "profitability": 0.3,
+      "growth": 0.3,
+      "financial_strength": 0.15,
+      "cash_flow": 0.15,
+      "shareholder_return": 0.1
+    },
+    "quality_normalization": "zscore",
+    "quality_rollup": "median",
+    "min_quality_score": 0.0,
+    "momentum_selection": "top_n",
+    "momentum_top_pct": 0.3,
+    "momentum_top_n": 250,
+    "stability_selection": "top_n",
+    "stability_top_pct": 0.5,
+    "stability_top_n": 200,
+    "enable_cap_filter": false,
+    "large_cap_pct": 0.5,
+    "mid_cap_pct": 0.3,
+    "small_cap_pct": 0.2
+  }
+}
