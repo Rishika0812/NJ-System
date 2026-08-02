@@ -883,7 +883,10 @@ def _common_from_legs(
             if _g_sc:
                 for _k, _v in _g_sc.items():
                     if _k not in ("ticker", "combined_score", "selected", "rank", "as_of", "phase_id", "trade", "entry_date", "exit_date"):
-                        row[f"{lbl} | gate_{_k}"] = round(float(_v), 4) if pd.notna(_v) else None
+                        try:
+                            row[f"{lbl} | gate_{_k}"] = round(float(_v), 4)
+                        except (TypeError, ValueError):
+                            row[f"{lbl} | gate_{_k}"] = _v
                 # Collect quality_score_raw (pre-threshold) first, fallback to quality_score
                 _g_ms = _g_sc.get("momentum_score")
                 _g_ss = _g_sc.get("stability_score")
@@ -1835,6 +1838,13 @@ def run_momentum(
                     "beta_rank": cr.get("beta_rank"),
                     "selected_to_buy": bool(cr.get("selected_to_buy", False)),
                     "traded": cr["ticker"] in traded}
+                if metric == "gate":
+                    base["mean_momentum_score"] = cr.get("mean_momentum_score")
+                    base["mean_stability_score"] = cr.get("mean_stability_score")
+                    base["mean_quality_score"] = cr.get("mean_quality_score")
+                    base["passed_momentum"] = cr.get("passed_momentum")
+                    base["passed_stability"] = cr.get("passed_stability")
+                    base["passed_quality"] = cr.get("passed_quality")
                 if metric == "off":
                     base["avg_vol"] = cr.get("mean_vol")
                     base.update(_wvol.get(cr["ticker"], {}))

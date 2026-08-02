@@ -178,7 +178,6 @@ class GateParams:
         QualityFactor("revenue_growth_weighted", "growth", weight=1.0),
         QualityFactor("roe_growth_weighted", "growth", weight=0.8),
         QualityFactor("roce_growth_weighted", "growth", weight=0.8),
-        QualityFactor("dps_growth_weighted", "growth", weight=0.6),
         QualityFactor("sustainable_growth_rate", "growth", weight=0.8),
         QualityFactor("interest_coverage_ratio", "financial_strength", weight=1.0, min_threshold=1.5),
         QualityFactor("equity_to_total_capital", "financial_strength", weight=1.0, min_threshold=0.40),
@@ -402,15 +401,17 @@ def stability_gate(mf_asof: pd.DataFrame, eligible: list[str], params: GateParam
 
 
 def quality_gate(quality: pd.DataFrame, eligible: list[str],
-                  params: GateParams) -> tuple[dict[str, pd.Series], pd.Series, pd.Series]:
+                  params: GateParams) -> tuple[dict[str, pd.Series], pd.Series, pd.Series, dict[str, pd.Series], dict[str, pd.Series], dict[str, pd.Series]]:
     """Full-parity quality pillar scoring (verbatim logic from S3-main's quality_gate)."""
     idx = pd.Index(eligible)
     if quality.empty:
-        return {}, pd.Series(np.nan, index=idx), pd.Series(np.nan, index=idx)
+        return {}, pd.Series(np.nan, index=idx), pd.Series(np.nan, index=idx), {}, {}, {}
     sub = quality.reindex(idx)
 
     pillar_norm: dict[str, list[pd.Series]] = {p: [] for p in params.quality_pillar_weights}
     pillar_w: dict[str, list[float]] = {p: [] for p in params.quality_pillar_weights}
+    factor_raw: dict[str, pd.Series] = {}
+    factor_norm: dict[str, pd.Series] = {}
     for f in params.quality_factors:
         if f.name not in sub.columns:
             continue
@@ -418,6 +419,8 @@ def quality_gate(quality: pd.DataFrame, eligible: list[str],
         ns = normalize(raw, params.quality_normalization)
         pillar_norm[f.pillar].append(ns)
         pillar_w[f.pillar].append(f.weight)
+        factor_raw[f.name] = raw
+        factor_norm[f.name] = ns
 
     pillar_scores: dict[str, pd.Series] = {}
     for p, series_list in pillar_norm.items():
@@ -433,7 +436,7 @@ def quality_gate(quality: pd.DataFrame, eligible: list[str],
     pw = pd.Series(params.quality_pillar_weights)
     active = [p for p in pw.index if pillar_scores[p].notna().any()]
     if not active:
-        return pillar_scores, pd.Series(np.nan, index=idx), pd.Series(np.nan, index=idx)
+        return pillar_scores, pd.Series(np.nan, index=idx), pd.Series(np.nan, index=idx), factor_raw, factor_norm, {}
     wvec = pw[active] / pw[active].sum()
     qual = sum(pillar_scores[p] * wvec[p] for p in active)
     qual = minmax(qual) if qual.notna().any() else qual
@@ -441,15 +444,17 @@ def quality_gate(quality: pd.DataFrame, eligible: list[str],
     # Store pre-threshold score for display purposes
     qual_pre_threshold = qual.copy()
 
+    factor_pass: dict[str, pd.Series] = {}
     for f in params.quality_factors:
         if f.min_threshold is None or f.name not in sub.columns:
             continue
         breach = sub[f.name] < f.min_threshold
         qual = qual.mask(breach, np.nan)
+        factor_pass[f.name] = ~breach
 
     if params.min_quality_score > 0:
         qual = qual[qual >= params.min_quality_score]
-    return pillar_scores, qual, qual_pre_threshold
+    return pillar_scores, qual, qual_pre_threshold, factor_raw, factor_norm, factor_pass
 
 
 def _select(score: pd.Series, mode: SelectionMode, top_pct: float, top_n: int) -> list[str]:
@@ -492,15 +497,19 @@ def rank_universe(as_of: pd.Timestamp, eligible: list[str], mf: pd.DataFrame,
     else:
         stab_survivors = set(stab_eligible)
     
-    # 3. Quality Gate
+# 3. Quality Gate
     qual_eligible = [t for t in stab_eligible if t in stab_survivors]
     pillars = {}
+    factor_raw: dict[str, pd.Series] = {}
+    factor_norm: dict[str, pd.Series] = {}
+    factor_pass: dict[str, pd.Series] = {}
     if params.enable_quality:
         if qual_cached is not None:
             qual = qual_cached.reindex(qual_eligible)
             qual_pre_threshold = qual.copy()
+            pillars, _qual_check, _qual_pre_check, factor_raw, factor_norm, factor_pass = quality_gate(quality_rolled, qual_eligible, params)
         else:
-            pillars, qual, qual_pre_threshold = quality_gate(quality_rolled, qual_eligible, params)
+            pillars, qual, qual_pre_threshold, factor_raw, factor_norm, factor_pass = quality_gate(quality_rolled, qual_eligible, params)
         final_survivors = set(qual.dropna().index)
     else:
         qual = pd.Series(np.nan, index=qual_eligible)
@@ -521,6 +530,14 @@ def rank_universe(as_of: pd.Timestamp, eligible: list[str], mf: pd.DataFrame,
     for p, s in pillars.items():
         if not s.empty:
             out[f"pillar_{p}"] = s.reindex(eligible).values
+            
+    for f in params.quality_factors:
+        if f.name in factor_raw:
+            out[f"qf_{f.name}_raw"] = factor_raw[f.name].reindex(eligible).values
+        if f.name in factor_norm:
+            out[f"qf_{f.name}_z"] = factor_norm[f.name].reindex(eligible).values
+        if f.name in factor_pass:
+            out[f"qf_{f.name}_pass"] = factor_pass[f.name].reindex(eligible).values
             
     has_any = out[["momentum_score", "stability_score", "quality_score"]].notna().any(axis=1)
     if not has_any.any():

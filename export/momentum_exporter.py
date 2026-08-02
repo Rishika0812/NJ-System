@@ -1003,6 +1003,9 @@ def generate_momentum_excel(
                 "window_rank", "common", "bought"]
                 if c in disp.columns]
         
+        # Track Quality factor audit columns for collapsible outline
+        _qf_start_col = _qf_end_col = None
+        
         # Add gate score columns if present
         if _exp_metric == "gate":
             # Gate weights from config (handle both dict and dataclass)
@@ -1025,8 +1028,24 @@ def generate_momentum_excel(
             for c in disp.columns:
                 if c.startswith("pillar_") and c not in keep:
                     keep.append(c)
+            
+            # Add Quality factor audit columns (qf_*) - collect for collapsible outline
+            for c in disp.columns:
+                if c.startswith("qf_") and c not in keep:
+                    if _qf_start_col is None:
+                        _qf_start_col = len(keep) + 1  # 1-based column index
+                    keep.append(c)
+            _qf_end_col = len(keep) if _qf_start_col is not None else None
         
-        disp = disp[keep].rename(columns=lambda c: c.replace("_", " ").title())
+        def _qf_label(col: str) -> str:
+            body = col[len("qf_"):]
+            for suf, tag in (("_raw", "Raw"), ("_z", "Z-Score"), ("_pass", "Pass")):
+                if body.endswith(suf):
+                    return body[: -len(suf)].replace("_", " ").title() + f" ({tag})"
+            return col.replace("_", " ").title()
+        
+        disp = disp[keep].rename(
+            columns=lambda c: _qf_label(c) if c.startswith("qf_") else c.replace("_", " ").title())
         # Override specific column names for clarity
         disp = disp.rename(columns={
             "Vol Value":    _exp_vol_lbl,
@@ -1048,8 +1067,12 @@ def generate_momentum_excel(
                 _weight_info = f"  ·  Weights: Momentum={_mw:.0%}, Quality={_qw:.0%}, Stability={_sw:.0%}"
             else:
                 _weight_info = "  ·  Weights: Momentum=40%, Quality=40%, Stability=20%"
+            _qf_note = ("  ·  Quality factor audit columns (Raw/Z-Score/Pass per factor) are "
+                        "grouped & collapsed by default — use the '+' outline control above the "
+                        "columns to expand" if _qf_start_col is not None else "")
             _title(ws5, f"Cycle Leg Rankings — Gate System (ARQM)  ·  Momentum Gate → Stability Gate → Quality Gate{_weight_info}"
-                   + "  ·  Shows Momentum/Stability/Quality Gate Scores, Final Score = Σ(Score × Weight)  ·  ✓ = passed gate / bought", len(disp.columns))
+                   + "  ·  Shows Momentum/Stability/Quality Gate Scores, Final Score = Σ(Score × Weight)  ·  ✓ = passed gate / bought"
+                   + _qf_note, len(disp.columns))
         elif cfg.get("metric") == "off":
             _sn2 = "Bot-N" if cfg.get("selection_side", "top") == "bottom" else "Top-N"
             _wdays = cfg.get("vf_windows", [("buy", 100)])[0][1] if cfg.get("vf_windows") else 100
@@ -1073,6 +1096,15 @@ def generate_momentum_excel(
                    + "  ·  ROC % and leg volatility shown for every stock  ·  ✓ = common / bought "
                    "(quartiles are on 'Eligible Stock Ranking')" + _fixed_leg_sfx, len(disp.columns))
         _write_df(ws5, disp, 3, green_flag_col="Bought")
+        
+        # Collapsible column grouping for Quality factor audit columns (when present)
+        if _qf_start_col is not None:
+            ws5.sheet_properties.outlinePr.summaryRight = True
+            for col_idx in range(_qf_start_col, _qf_end_col + 1):
+                col_letter = get_column_letter(col_idx)
+                ws5.column_dimensions[col_letter].outlineLevel = 1
+                ws5.column_dimensions[col_letter].hidden = True
+            ws5.sheet_view.showOutlineSymbols = True
     else:
         _title(ws5, "Cycle Leg Rankings", 2)
         ws5.cell(row=3, column=1, value=(
